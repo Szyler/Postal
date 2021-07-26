@@ -94,8 +94,9 @@ function Postal_BlackBook:AddAlt()
 			flag = false
 		else
 			local p, r, f = strsplit("|", db[i])
-			if r == realm and f == faction and p ~= player then
-				enableAltsMenu = true
+			--if r == realm and f == faction and p ~= player then
+			if r == realm and p ~= player then
+					enableAltsMenu = true
 			end
 		end
 	end
@@ -371,7 +372,8 @@ function Postal_BlackBook.BlackBookMenu(self, level)
 			info.notCheckable = 1
 			for i = 1, #db do
 				local p, r, f = strsplit("|", db[i])
-				if r == realm and f == faction and p ~= player then
+				--if r == realm and f == faction and p ~= player then
+				if r == realm and p ~= player then
 					info.text = p
 					info.func = Postal_BlackBook.SetSendMailName
 					info.arg1 = p
