@@ -9,24 +9,63 @@ Postal_OpenAll.description2 = L[ [[|cFFFFCC00*|r Simple filters are available fo
 |cFFFFCC00*|r Disable the Verbose option to stop the chat spam while opening mail.]] ]
 
 local mailIndex, attachIndex
+local origNumItems, origTotalItems
 local lastItem, lastNumAttach, lastNumGold
 local wait
 local button
 local Postal_OpenAllMenuButton
 local skipFlag
-local invFull
+local invFull, invAlmostFull
 local openAllOverride
 
+-- Frame to process opening mail
 local updateFrame = CreateFrame("Frame")
 updateFrame:Hide()
 updateFrame:SetScript("OnShow", function(self)
 	self.time = Postal.db.profile.OpenSpeed
+	if invAlmostFull and self.time < 1.0 and not self.lootingMoney then
+		-- Delay opening to 1 second to account for a nearly full
+		-- inventory to respect the KeepFreeSpace setting
+		self.time = 1.0
+	end
+	self.lootingMoney = nil
 end)
 updateFrame:SetScript("OnUpdate", function(self, elapsed)
 	self.time = self.time - elapsed
 	if self.time <= 0 then
 		self:Hide()
 		Postal_OpenAll:ProcessNext()
+	end
+end)
+
+-- Frame to refresh the Inbox
+-- I'm cheap so instead of trying to track 60 or so seconds since the
+-- last CheckInbox(), I just call CheckInbox() every 5 seconds
+local refreshFrame = CreateFrame("Frame", nil, MailFrame)
+refreshFrame:Hide()
+refreshFrame:SetScript("OnShow", function(self)
+	self.time = 5
+	self.mode = nil
+end)
+refreshFrame:SetScript("OnUpdate", function(self, elapsed)
+	self.time = self.time - elapsed -- CurrentTime - (continuously updated elapsed)
+	if self.time <= 0 then -- If elapsed becomes too big then
+		if self.mode == nil then
+			self.time = 5 -- sets current time + 5
+			Postal:Print(L["Refreshing mailbox..."])
+			CheckInbox()
+			local current, total = GetInboxNumItems()
+			if current == 50 or current == total then
+				-- If we're here, then mailbox contains a full fresh 50 or
+				-- we're showing all the mail we have. Continue OpenAll in
+				-- 1 second(s) to allow for other addons to do stuff.
+				self.time = 1
+				self.mode = 1
+			end
+		else
+			self:Hide()
+			Postal_OpenAll:OpenAll(true)
+		end
 	end
 end)
 
@@ -83,16 +122,20 @@ function Postal_OpenAll:MAIL_SHOW()
 	self:RegisterEvent("PLAYER_LEAVING_WORLD", "Reset")
 end
 
-function Postal_OpenAll:OpenAll()
-	mailIndex = GetInboxNumItems() or 0
+function Postal_OpenAll:OpenAll(isRecursive)
+	refreshFrame:Hide()
+	-- Get mail counts
+	origNumItems, origTotalItems = GetInboxNumItems()
+	mailIndex = origNumItems
 	attachIndex = ATTACHMENTS_MAX_RECEIVE
 	invFull = nil
+	invAlmostFull = nil
 	skipFlag = false
 	lastItem = false
 	lastNumAttach = nil
 	lastNumGold = nil
 	wait = false
-	openAllOverride = IsShiftKeyDown()
+	if not isRecursive then openAllOverride = IsShiftKeyDown() end
 	if mailIndex == 0 then
 		return
 	end
@@ -168,8 +211,10 @@ function Postal_OpenAll:ProcessNext()
 
 		-- Print message on next mail
 		if Postal.db.profile.OpenAll.SpamChat and attachIndex == ATTACHMENTS_MAX_RECEIVE then
-			local moneyString = msgMoney > 0 and " ["..Postal:GetMoneyString(msgMoney).."]" or ""
-			Postal:Print(format("%s %d: %s%s", L["Processing Message"], mailIndex, msgSubject or "", moneyString))
+			if not invFull or msgMoney > 0 then
+				local moneyString = msgMoney > 0 and " ["..Postal:GetMoneyString(msgMoney).."]" or ""
+				Postal:Print(format("%s %d: %s%s", L["Processing Message"], mailIndex, msgSubject or "", moneyString))
+			end
 		end
 
 		-- Find next attachment index backwards
@@ -188,11 +233,38 @@ function Postal_OpenAll:ProcessNext()
 			end
 			if free <= Postal.db.profile.OpenAll.KeepFreeSpace then
 				invFull = true
+				invAlmostFull = nil
 				Postal:Print(format(L["Not taking more items as there are now only %d regular bagslots free."], free))
+			elseif free <= Postal.db.profile.OpenAll.KeepFreeSpace + 1 then
+				invAlmostFull = true
 			end
 		end
 
-		if attachIndex > 0 and not invFull then
+		-- If inventory is full, check if the item to be looted can stack with an existing stack
+		local lootFlag = false
+		if attachIndex > 0 and invFull then
+			local name, itemTexture, count, quality, canUse = GetInboxItem(mailIndex, attachIndex)
+			local link = GetInboxItemLink(mailIndex, attachIndex)
+			local itemID = strmatch(link, "item:(%d+)")
+			local stackSize = select(8, GetItemInfo(link))
+			if itemID and stackSize and GetItemCount(itemID) > 0 then
+				for bag = 0, NUM_BAG_SLOTS do
+					for slot = 1, GetContainerNumSlots(bag) do
+						local texture2, count2, locked2, quality2, readable2, lootable2, link2 = GetContainerItemInfo(bag, slot)
+						if link2 then
+							local itemID2 = strmatch(link2, "item:(%d+)")
+							if itemID == itemID2 and count + count2 <= stackSize then
+								lootFlag = true
+								break
+							end
+						end
+					end
+					if lootFlag then break end
+				end
+			end
+		end
+
+		if attachIndex > 0 and (lootFlag or not invFull) then
 			-- If there's attachments, take the item
 			--Postal:Print("Getting Item from Message "..mailIndex..", "..attachIndex)
 			TakeInboxItem(mailIndex, attachIndex)
@@ -215,6 +287,7 @@ function Postal_OpenAll:ProcessNext()
 			lastNumAttach, lastNumGold = Postal:CountItemsAndMoney()
 			wait = true
 
+			updateFrame.lootingMoney = true
 			updateFrame:Show()
 		else
 			-- Mail has no item or money, go to next mail
@@ -225,6 +298,18 @@ function Postal_OpenAll:ProcessNext()
 
 	else
 		-- Reached the end of opening all selected mail
+
+		-- If the numbers are different from previously
+		local numItems, totalItems = GetInboxNumItems()
+		if origNumItems ~= numItems or origTotalItems ~= totalItems then
+			-- We only want to refresh if there's more items to show
+			if (totalItems > numItems and numItems < 50) or (origTotalItems > origNumItems) then
+				Postal:Print(L["Not all messages are shown, refreshing mailbox soon to continue Open All..."])
+				refreshFrame:Show()
+				return
+			end
+		end
+
 		if IsAddOnLoaded("MrPlow") then
 			if MrPlow.DoStuff then
 				MrPlow:DoStuff("stack")
@@ -238,6 +323,7 @@ function Postal_OpenAll:ProcessNext()
 end
 
 function Postal_OpenAll:Reset(event)
+	refreshFrame:Hide()
 	updateFrame:Hide()
 	self:UnregisterEvent("UI_ERROR_MESSAGE")
 	button:SetText(L["Open All"])
@@ -267,6 +353,7 @@ function Postal_OpenAll.ModuleMenu(self, level)
 	if not level then return end
 	local info = self.info
 	wipe(info)
+	info.isNotRadio = 1
 	local db = Postal.db.profile.OpenAll
 	
 	if level == 1 + self.levelAdjust then
@@ -361,6 +448,8 @@ function Postal_OpenAll.ModuleMenu(self, level)
 			info.value = "KeepFreeSpace"
 			info.func = self.UncheckHack
 			UIDropDownMenu_AddButton(info, level)
+			local listFrame = _G["DropDownList"..level]
+			self.UncheckHack(_G[listFrame:GetName().."Button"..listFrame.numButtons])
 
 			info.text = L["Verbose mode"]
 			info.hasArrow = nil
@@ -375,6 +464,7 @@ function Postal_OpenAll.ModuleMenu(self, level)
 		if UIDROPDOWNMENU_MENU_VALUE == "KeepFreeSpace" then
 			local keepFree = db.KeepFreeSpace
 			info.func = Postal_OpenAll.SetKeepFreeSpace
+			info.isNotRadio = nil
 			for _, v in ipairs(Postal.keepFreeOptions) do
 				info.text = v
 				info.checked = v == keepFree
