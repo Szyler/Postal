@@ -75,10 +75,10 @@ function Postal_CarbonCopy:CopyMail()
 	if Postal.CreateAboutFrame then
 		Postal:CreateAboutFrame()
 	end
-	aboutFrame:Show()
-	aboutFrame.editBox:SetText(sender..subject..bodyText.."\r\n")
-	aboutFrame.editBox:HighlightText(0)
-	aboutFrame.editBox:SetFocus()
+	Postal.aboutFrame:Show()
+	Postal.aboutFrame.editBox:SetText(sender..subject..bodyText.."\r\n")
+	Postal.aboutFrame.editBox:HighlightText(0)
+	Postal.aboutFrame.editBox:SetFocus()
 end
 
 function Postal_CarbonCopy:CreateButton()
