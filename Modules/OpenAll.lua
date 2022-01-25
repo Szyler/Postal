@@ -52,9 +52,9 @@ refreshFrame:SetScript("OnUpdate", function(self, elapsed)
 	if self.time <= 0 then -- If elapsed becomes too big then
 		if self.mode == nil then
 			self.time = 5 -- sets current time + 5
-			Postal:Print(L["Refreshing mailbox..."])
-			CheckInbox()
 			local current, total = GetInboxNumItems()
+			Postal:Print("Refreshing mailbox... " .. total .. " mails remaining.")
+			CheckInbox()
 			if current == 50 or current == total then
 				-- If we're here, then mailbox contains a full fresh 50 or
 				-- we're showing all the mail we have. Continue OpenAll in
@@ -291,11 +291,18 @@ function Postal_OpenAll:ProcessNext()
 			updateFrame:Show()
 		else
 			-- Mail has no item or money, go to next mail
-			mailIndex = mailIndex - 1
-			attachIndex = ATTACHMENTS_MAX_RECEIVE
-			return self:ProcessNext() -- tail call
+			-- Ascension fix. Remove "Sale Pending" mail
+			if strfind(msgSubject, "Sale Pending:") then
+				Postal:Print("Removing \"Sale Pending\" message (" .. msgSubject .. ")")
+				DeleteInboxItem(mailIndex)
+				wait = true
+				updateFrame:Show()
+			else
+				mailIndex = mailIndex - 1
+				attachIndex = ATTACHMENTS_MAX_RECEIVE
+				return self:ProcessNext() -- tail call
+			end
 		end
-
 	else
 		-- Reached the end of opening all selected mail
 
@@ -304,7 +311,7 @@ function Postal_OpenAll:ProcessNext()
 		if origNumItems ~= numItems or origTotalItems ~= totalItems then
 			-- We only want to refresh if there's more items to show
 			if (totalItems > numItems and numItems < 50) or (origTotalItems > origNumItems) then
-				Postal:Print(L["Not all messages are shown, refreshing mailbox soon to continue Open All..."])
+				Postal:Print("Not all messages are shown, refreshing mailbox soon to continue Open All..." .. total .. " mails remaining.")
 				refreshFrame:Show()
 				return
 			end
